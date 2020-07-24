@@ -1,0 +1,174 @@
+---
+title: "Weather Events and its Economic and Health Impact across the United States"
+author: "Raymark Parocha"
+date: "7/24/2020"
+output: html_document
+---
+
+## Synopsis
+
+This is the second course project and last requirement of the Reproducible Research course. For this requirement, the goal
+is to assess the storm database of US National Oceanic and Atmospheric Administration (NOAA). In particular, the impact of
+severe weather events on both economy (property and crop damages) and health (injuries and fatalities) are to be examined. 
+
+In addition, it is also important to note that the storm database spans from 1950 until November 2011. The data documentation
+of this data can be accessed in this [Link](https://d396qusza40orc.cloudfront.net/repdata%2Fpeer2_doc%2Fpd01016005curr.pdf)
+
+## Data Processing
+
+### Section 1: Importing libraries and downloading the raw data
+
+Import the libraries that will be used in the analysis.
+
+```{r Libraries}
+library("data.table")
+library("ggplot2")
+```
+
+Download the raw data from NOAA and assign it to a data table.
+```{r DataLoading}
+download.file("https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2", 
+              destfile = paste0(getwd(), '/repdata%2Fdata%2FStormData.csv.bz2'), mode="wb")
+
+stormDataFrame <- read.csv("repdata%2Fdata%2FStormData.csv.bz2")
+
+# Converting data.frame to data.table
+stormDataTable <- as.data.table(stormDataFrame)
+```
+
+### Section 2: Inspect column names before subsetting
+
+Inspect the column names of the data table that are relevant to the analysis.
+```{r ColumnNames}
+colnames(stormDataTable)
+```
+
+### Section 3: Subsetting data
+
+Upon checking the column names, the relevant variables for Health and Economy are as follows.
+
+Health variables: 
+1. FATALITIES refer to the approximate number of deaths.
+2. INJURIES refer to the approximate number of injuries.
+
+Economic variables:
+1. PROPDMG refers to the approximate property damages
+2. PROPDMGEXP refers to the value of property damages
+3. CROPDMG refers to the approximate crop damages
+4. CROPDMGEXP refers to the value of crop damages
+
+Since these six columns were the only columns of interest, the other 31 columns will be removed. In addition, it is 
+also important to remove the rows where the effect of the storm is negligible or when the values among these variables
+is equivalent to zero.
+```{r DataSubsetting, results="hide"}
+
+# Restructuring the Data table to remove unnecessary columns
+columnsOfinterest <- colnames(stormDataTable[, !c("EVTYPE", "FATALITIES", "INJURIES", "PROPDMG", "PROPDMGEXP", "CROPDMG", "CROPDMGEXP")])
+
+stormDataTable[, c(columnsOfinterest) := NULL]
+
+# Remove incidents where the effect of the storm is negligible.   
+stormDataTable <- stormDataTable[(EVTYPE != "?" & (INJURIES > 0 | FATALITIES > 0 | PROPDMG > 0 | CROPDMG > 0)), c("EVTYPE", "FATALITIES", "INJURIES", "PROPDMG", "PROPDMGEXP", "CROPDMG", "CROPDMGEXP") ]
+```
+
+```{r DataTableInspect}
+# Checking the restructured data table
+tail(stormDataTable, 10)
+```
+
+### Section 4: Convert prefixes of PROPDMGEXP and CROPDMGEXP to their actual multiplier
+
+From the restructured data table, it can be seen that PROPDMGEXP and CROPDMGEXP have prefixes that actually denote a multiplier
+value to the power of 10. It is important to convert these prefixes to calculate the actual cost of property and crop damages.
+```{r FixingPrefix, results="hide"}
+
+# First, it is important that all damage exponents are in uppercase.
+cols <- c("PROPDMGEXP", "CROPDMGEXP")
+stormDataTable[,  (cols) := c(lapply(.SD, toupper)), .SDcols = cols]
+
+# Convert the alphanumeric symbols to their corresponding power of 10 numeric values.
+
+# For the Property Damages Multiplier (PROPDMGEXP)
+prefixProp <-  c("\"\"" = 10^0, "-" = 10^0, "+" = 10^0, "0" = 10^0, "1" = 10^1, "2" = 10^2, "3" = 10^3, "4" = 10^4, "5" = 10^5, "6" = 10^6, "7" = 10^7, "8" = 10^8, "9" = 10^9, "H" = 10^2, "K" = 10^3, "M" = 10^6, "B" = 10^9)
+stormDataTable[, PROPDMGEXP := prefixProp[as.character(stormDataTable[,PROPDMGEXP])]]
+stormDataTable[is.na(PROPDMGEXP), PROPDMGEXP := 10^0 ]
+
+# For the Crop Damages Multiplier (CROPDMGEXP)
+prefixCrop <-  c("\"\"" = 10^0, "?" = 10^0, "0" = 10^0, "K" = 10^3, "M" = 10^6,"B" = 10^9)
+stormDataTable[, CROPDMGEXP := prefixCrop[as.character(stormDataTable[,CROPDMGEXP])] ]
+stormDataTable[is.na(CROPDMGEXP), CROPDMGEXP := 10^0 ]
+```
+
+### Section 5: Creating a data table for the total property and crop damages inflicted by each event
+
+Two additional columns were created which was the result of the multiplication of PROPDMG and its multiplier PROPDMGEXP
+```{r ActualCostColums}
+# Creating two additional columns for the actual value for Crop Damage and Property Damage  
+stormDataTable <- stormDataTable[, .(EVTYPE, FATALITIES, INJURIES, PROPDMG, PROPDMGEXP, PROPERTY = PROPDMG * PROPDMGEXP, CROPDMG, CROPDMGEXP, CROPS = CROPDMG * CROPDMGEXP)]
+```
+
+For this part, a new data table was created that sums up the total property and crop damages incurred by various events.
+```{r TotalDamagebyEvent}
+PropCropCost <- stormDataTable[, .(PROPERTY = sum(PROPERTY), CROPS = sum(CROPS), TOTALCOST = sum(PROPERTY) + sum(CROPS)), by = .(EVTYPE)]
+
+PropCropCost <- PropCropCost[order(-TOTALCOST), ]
+PropCropCost <- PropCropCost[1:10, ]
+
+head(PropCropCost, 10)
+```
+
+### Section 6: Creating a data table for the total fatalities and injuries inflicted by each event
+
+```{r TotalHumanDamagebyEvent}
+Casualties <- stormDataTable[, .(FATALITIES = sum(FATALITIES), INJURIES = sum(INJURIES), TOTALCASUALTY = sum(FATALITIES) + sum(INJURIES)), by = .(EVTYPE)]
+
+Casualties <- Casualties[order(-TOTALCASUALTY), ]
+
+Casualties <- Casualties[1:10, ]
+
+head(Casualties, 10)
+```
+
+## Results
+
+### Section 1: Analyzing which events resulted to damages to population health
+
+In this section, a bar chart was constructed to visually see which event had the most damages among US citizens from 1950
+until November 2011.
+
+From the bar chart below, it can be seen that majority of event-based casualty in the United States were caused by tornadoes. Other events do not contribute as much which means citizens should prepare measures to counter the effects of upcoming tornadoes. 
+
+```{r Casualties}
+casualties <- melt(Casualties, id.vars="EVTYPE", variable.name = "Casualty")
+
+# Creating a Bar Chart
+casualtyGraph<- ggplot(casualties, aes(x=reorder(EVTYPE, -value), y=value/10^3)) +
+                      geom_bar(stat="identity", aes(fill=Casualty), position="dodge") +
+                      xlab("Type of Event") +
+                      ylab("Number of People (thousand)") +
+                      theme(axis.text.x = element_text(angle=45, hjust=1))+
+                      ggtitle("Major Events resulting to Casualties") + 
+                      theme(plot.title = element_text(hjust = 0.5))
+casualtyGraph
+```
+
+### Section 2: Analyzing which events resulted to greatest economic consequences
+
+In this section, a bar chart was constructed to summarized which storm event incurred most damages in US dollars in terms of property and crop damages.
+
+It can be seen from the graph that floods are top contributor to damage cost to property and crops. After the effects brought about by floods, disasters such as hurricane, tornado and storm surge also imposed major damages to property and crops in the United States for the past 60 years according to the data.
+
+```{r Economy}
+propcropEcon <- melt(PropCropCost, id.vars="EVTYPE", variable.name = "Damages")
+
+# Creating a Bar chart
+economyGraph <- ggplot(propcropEcon, aes(x=reorder(EVTYPE, -value), y=value/10^9)) + 
+                      geom_bar(stat="identity", aes(fill=Damages), position="dodge") +
+                      ylab("Cost in Billion Dollars") +
+                      xlab("Type of Event") +
+                      theme(axis.text.x = element_text(angle=45, hjust=1)) +
+                      ggtitle("Major Events resulting to Damages") + 
+                      theme(plot.title = element_text(hjust = 0.5))
+
+economyGraph
+```
